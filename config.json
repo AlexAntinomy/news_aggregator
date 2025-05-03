@@ -3,8 +3,13 @@
         "https://tass.ru/rss/v2.xml",
         "https://www.kommersant.ru/RSS/news.xml",
         "https://lenta.ru/rss",
-        "https://news.un.org/feed/subscribe/ru/news/all/rss.xml"
+        "https://news.un.org/feed/subscribe/ru/news/all/rss.xml",
+        "https://russian.rt.com/rss"
         
     ],
-    "poll_interval": 1
-}
+    "poll_interval": 1,
+    "rabbitmq": {
+      "url": "amqp://guest:guest@localhost:5672/",
+      "queue": "rss_tasks"
+    }
+  }

@@ -2,24 +2,25 @@ package config
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/url"
 	"os"
 )
 
+type RabbitMQConfig struct {
+	URL   string `json:"url"`
+	Queue string `json:"queue"`
+}
+
 type Config struct {
-	RSSFeeds     []string `json:"rss_feeds"`
-	PollInterval int      `json:"poll_interval"`
+	RSSFeeds     []string       `json:"rss_feeds"`
+	PollInterval int            `json:"poll_interval"`
+	RabbitMQ     RabbitMQConfig `json:"rabbitmq"`
 }
 
 func (cfg *Config) Validate() error {
-	if cfg.PollInterval < 1 {
-		return errors.New("poll interval must be ≥ 1 minute")
-	}
 	for _, u := range cfg.RSSFeeds {
 		if _, err := url.ParseRequestURI(u); err != nil {
-			return fmt.Errorf("invalid RSS URL: %s", u)
+			return err
 		}
 	}
 	return nil
