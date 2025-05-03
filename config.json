@@ -2,7 +2,8 @@
     "rss_feeds": [
         "https://tass.ru/rss/v2.xml",
         "https://www.kommersant.ru/RSS/news.xml",
-        "https://lenta.ru/rss"
+        "https://lenta.ru/rss",
+        "https://news.un.org/feed/subscribe/ru/news/all/rss.xml"
         
     ],
     "poll_interval": 1

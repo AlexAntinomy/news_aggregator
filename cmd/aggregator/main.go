@@ -2,29 +2,46 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"news_aggregator/internal/config"
 	"news_aggregator/internal/db"
 	"news_aggregator/internal/fetcher"
+	"news_aggregator/internal/logger"
 	"news_aggregator/internal/server"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
 func main() {
-	ctx := context.Background()
+	logger.Init()
+	defer logger.Log.Info("Application stopped")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger.Log.Info("Loading configuration")
 	cfg, err := config.LoadConfig("config.json")
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Log.Fatalf("Failed to load config: %v", err)
 	}
 
+	if err := cfg.Validate(); err != nil {
+		logger.Log.Fatalf("Invalid configuration: %v", err)
+	}
+
+	logger.Log.Info("Connecting to database")
 	database, err := db.NewDB(ctx, "postgres://admin:admin@localhost:5432/newsdb")
 	if err != nil {
-		log.Fatalf("Failed to connect to DB: %v", err)
+		logger.Log.Fatalf("Database connection error: %v", err)
 	}
-	defer database.Close()
+	defer func() {
+		database.Close()
+		logger.Log.Info("Database connection closed")
+	}()
 
+	logger.Log.WithField("interval", cfg.PollInterval).Info("Starting RSS polling")
 	go fetcher.StartPolling(
 		ctx,
 		database,
@@ -34,10 +51,27 @@ func main() {
 
 	srv := server.NewServer(database)
 	http.HandleFunc("GET /api/news/{limit}", srv.GetNews)
+	http.HandleFunc("GET /health", srv.HealthCheck)
 	http.Handle("/", http.FileServer(http.Dir("./web")))
 
-	log.Println("Server starting on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal(err)
+	server := &http.Server{Addr: ":8080"}
+	go func() {
+		logger.Log.Info("Starting HTTP server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatalf("Server fatal error: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Log.Info("Received shutdown signal")
+	ctxShutdown, cancelShutdown := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelShutdown()
+
+	if err := server.Shutdown(ctxShutdown); err != nil {
+		logger.Log.Fatalf("Forced shutdown: %v", err)
 	}
+	logger.Log.Info("Server stopped gracefully")
 }

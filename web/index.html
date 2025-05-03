@@ -5,6 +5,7 @@
     <style>
         .news-item { margin: 20px; padding: 15px; border: 1px solid #ddd; }
         .news-item h3 { margin-top: 0; }
+        .source { color: #727272; font-size: 0.9em; }
     </style>
 </head>
 <body>
@@ -12,6 +13,17 @@
     <div id="news-container"></div>
 
     <script>
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('ru-RU', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
         fetch('/api/news/10')
             .then(response => response.json())
             .then(news => {
@@ -21,12 +33,16 @@
                     div.className = 'news-item';
                     div.innerHTML = `
                         <h3><a href="${item.link}" target="_blank">${item.title}</a></h3>
-                        <p>${item.description}</p>
-                        <small>${new Date(item.date).toLocaleString()} | Source: ${item.feed}</small>
+                        <p>${item.description || ''}</p>
+                        <div class="source">
+                            <span>${formatDate(item.date)}</span> | 
+                            <a href="${item.feed}" target="_blank">Источник</a>
+                        </div>
                     `;
                     container.appendChild(div);
                 });
-            });
+            })
+            .catch(err => console.error('Error fetching news:', err));
     </script>
 </body>
 </html>

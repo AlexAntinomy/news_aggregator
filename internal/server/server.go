@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"news_aggregator/internal/db"
@@ -16,11 +17,22 @@ func NewServer(db *db.Database) *Server {
 	return &Server{db: db}
 }
 
+func (s *Server) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	if err := s.db.Pool.Ping(r.Context()); err != nil {
+		http.Error(w, "DB unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Write([]byte("OK"))
+}
+
 func (s *Server) GetNews(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.PathValue("limit")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 {
 		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 
 	rows, err := s.db.Pool.Query(r.Context(), `
@@ -39,18 +51,25 @@ func (s *Server) GetNews(w http.ResponseWriter, r *http.Request) {
 	var news []map[string]interface{}
 	for rows.Next() {
 		var (
-			title, desc, link, feedURL string
-			pubDate                    time.Time
+			title, link, feedURL string
+			pubDate              time.Time
+			desc                 sql.NullString
 		)
 
-		if err := rows.Scan(&title, &desc, &pubDate, &link, &feedURL); err != nil {
+		if err := rows.Scan(
+			&title,
+			&desc,
+			&pubDate,
+			&link,
+			&feedURL,
+		); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		news = append(news, map[string]interface{}{
 			"title":       title,
-			"description": desc,
+			"description": desc.String,
 			"date":        pubDate.Format(time.RFC3339),
 			"link":        link,
 			"feed":        feedURL,
