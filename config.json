@@ -1,0 +1,9 @@
+{
+    "rss_feeds": [
+        "https://tass.ru/rss/v2.xml",
+        "https://www.kommersant.ru/RSS/news.xml",
+        "https://lenta.ru/rss"
+        
+    ],
+    "poll_interval": 1
+}

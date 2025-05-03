@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>News Aggregator</title>
+    <style>
+        .news-item { margin: 20px; padding: 15px; border: 1px solid #ddd; }
+        .news-item h3 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <h1>Latest News</h1>
+    <div id="news-container"></div>
+
+    <script>
+        fetch('/api/news/10')
+            .then(response => response.json())
+            .then(news => {
+                const container = document.getElementById('news-container');
+                news.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'news-item';
+                    div.innerHTML = `
+                        <h3><a href="${item.link}" target="_blank">${item.title}</a></h3>
+                        <p>${item.description}</p>
+                        <small>${new Date(item.date).toLocaleString()} | Source: ${item.feed}</small>
+                    `;
+                    container.appendChild(div);
+                });
+            });
+    </script>
+</body>
+</html>
