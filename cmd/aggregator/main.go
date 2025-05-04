@@ -41,17 +41,19 @@ func main() {
 		logger.Log.Info("Database connection closed")
 	}()
 
-	logger.Log.WithField("interval", cfg.PollInterval).Info("Starting RSS polling")
+	logger.Log.WithField("interval", "5s").Info("Starting RSS polling")
 	go fetcher.StartPolling(
 		ctx,
 		database,
 		cfg.RSSFeeds,
-		time.Duration(cfg.PollInterval)*time.Minute,
+		5*time.Second,
 	)
 
 	srv := server.NewServer(database)
-	http.HandleFunc("GET /api/news/{limit}", srv.GetNews)
-	http.HandleFunc("GET /health", srv.HealthCheck)
+
+	http.HandleFunc("/api/news/count", srv.GetNewNewsCount)
+	http.HandleFunc("/api/news/", srv.GetNews)
+	http.HandleFunc("/health", srv.HealthCheck)
 	http.Handle("/", http.FileServer(http.Dir("./web")))
 
 	server := &http.Server{Addr: ":8080"}

@@ -3,8 +3,9 @@
         "https://tass.ru/rss/v2.xml",
         "https://www.kommersant.ru/RSS/news.xml",
         "https://lenta.ru/rss",
-        "https://news.un.org/feed/subscribe/ru/news/all/rss.xml"
-        
+        "https://news.un.org/feed/subscribe/ru/news/all/rss.xml",
+        "https://www.ria.ru/export/rss2/archive/index.xml",
+        "https://www.5-tv.ru/news/rss/"
     ],
-    "poll_interval": 1
+    "poll_interval": 5
 }

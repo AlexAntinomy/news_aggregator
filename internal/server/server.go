@@ -9,14 +9,17 @@ import (
 	"time"
 )
 
+// Server хранит зависимости HTTP-обработчиков, в частности БД.
 type Server struct {
 	db *db.Database
 }
 
+// NewServer создаёт новый экземпляр Server с переданной базой данных.
 func NewServer(db *db.Database) *Server {
 	return &Server{db: db}
 }
 
+// HealthCheck отвечает 200 OK, если база доступна, иначе 503.
 func (s *Server) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.Pool.Ping(r.Context()); err != nil {
 		http.Error(w, "DB unavailable", http.StatusServiceUnavailable)
@@ -25,9 +28,11 @@ func (s *Server) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+// GetNews возвращает JSON-массив последних limit новостей, сортированных по дате.
 func (s *Server) GetNews(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.PathValue("limit")
-	limit, err := strconv.Atoi(limitStr)
+	// извлекаем limit из пути /api/news/{limit}
+	path := r.URL.Path[len("/api/news/"):]
+	limit, err := strconv.Atoi(path)
 	if err != nil || limit < 1 {
 		limit = 10
 	}
@@ -56,13 +61,7 @@ func (s *Server) GetNews(w http.ResponseWriter, r *http.Request) {
 			desc                 sql.NullString
 		)
 
-		if err := rows.Scan(
-			&title,
-			&desc,
-			&pubDate,
-			&link,
-			&feedURL,
-		); err != nil {
+		if err := rows.Scan(&title, &desc, &pubDate, &link, &feedURL); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -85,4 +84,29 @@ func (s *Server) GetNews(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(news); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+// GetNewNewsCount возвращает JSON {"count": N} с количеством новостей,
+// опубликованных после времени since в параметре запроса.
+func (s *Server) GetNewNewsCount(w http.ResponseWriter, r *http.Request) {
+	lastUpdateStr := r.URL.Query().Get("since")
+	lastUpdate, err := time.Parse(time.RFC3339, lastUpdateStr)
+	if err != nil {
+		http.Error(w, "Invalid time format", http.StatusBadRequest)
+		return
+	}
+
+	var count int
+	err = s.db.Pool.QueryRow(r.Context(), `
+        SELECT COUNT(*) 
+        FROM news 
+        WHERE publication_date > $1
+    `, lastUpdate).Scan(&count)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"count": count})
 }

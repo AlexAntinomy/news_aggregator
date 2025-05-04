@@ -1,48 +1,19 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
-    <title>News Aggregator</title>
-    <style>
-        .news-item { margin: 20px; padding: 15px; border: 1px solid #ddd; }
-        .news-item h3 { margin-top: 0; }
-        .source { color: #727272; font-size: 0.9em; }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Агрегатор новостей</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Latest News</h1>
+    <h1>Лента новостей</h1>
+    <div id="controls">
+        <button id="load-news" disabled>Загрузить новости</button>
+        <span id="new-count">0 новых</span>
+    </div>
     <div id="news-container"></div>
 
-    <script>
-        function formatDate(dateStr) {
-            const date = new Date(dateStr);
-            return date.toLocaleDateString('ru-RU', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        }
-
-        fetch('/api/news/10')
-            .then(response => response.json())
-            .then(news => {
-                const container = document.getElementById('news-container');
-                news.forEach(item => {
-                    const div = document.createElement('div');
-                    div.className = 'news-item';
-                    div.innerHTML = `
-                        <h3><a href="${item.link}" target="_blank">${item.title}</a></h3>
-                        <p>${item.description || ''}</p>
-                        <div class="source">
-                            <span>${formatDate(item.date)}</span> | 
-                            <a href="${item.feed}" target="_blank">Источник</a>
-                        </div>
-                    `;
-                    container.appendChild(div);
-                });
-            })
-            .catch(err => console.error('Error fetching news:', err));
-    </script>
+    <script src="style.js" defer></script>
 </body>
 </html>
