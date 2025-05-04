@@ -1,24 +1,11 @@
-version: '3'
+version: "3.8"
+
 services:
   aggregator:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgres://postgres:password@host.docker.internal:5432/newsdb
     ports:
       - "8080:8080"
-    depends_on:
-      - postgres
-    environment:
-      - DATABASE_URL=postgres://admin:admin@postgres:5432/newsdb?sslmode=disable
-
-  postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin
-      - POSTGRES_DB=newsdb
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-volumes:
-  postgres_data:

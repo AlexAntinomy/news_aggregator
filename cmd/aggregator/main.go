@@ -31,8 +31,14 @@ func main() {
 		logger.Log.Fatalf("Invalid configuration: %v", err)
 	}
 
+	// Получаем строку подключения из переменной окружения
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		logger.Log.Fatal("DATABASE_URL is not set")
+	}
+
 	logger.Log.Info("Connecting to database")
-	database, err := db.NewDB(ctx, "postgres://admin:admin@localhost:5432/newsdb")
+	database, err := db.NewDB(ctx, dbURL)
 	if err != nil {
 		logger.Log.Fatalf("Database connection error: %v", err)
 	}
