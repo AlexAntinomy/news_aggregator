@@ -1,26 +1,96 @@
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: newsdb
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./migrations/000001_create_initial_tables.up.sql:/docker-entrypoint-initdb.d/000001_create_initial_tables.up.sql:ro
-    ports:
-      - "5432:5432"
+version: '3.8'
 
-  aggregator:
+services:
+  api_gateway:
     build:
-      context: .
+      context: ./api_gateway
       dockerfile: Dockerfile
-    depends_on:
-      - postgres
-    environment:
-      DATABASE_URL: "postgres://admin:admin@postgres:5432/newsdb?sslmode=disable"
     ports:
       - "8080:8080"
+    environment:
+      - NEWS_SERVICE_URL=http://news_service:8082
+      - COMMENTS_SERVICE_URL=http://comments_service:8081
+      - CENSORSHIP_SERVICE_URL=http://censorship_service:8083
+    depends_on:
+      news_service:
+        condition: service_healthy
+      comments_service:
+        condition: service_healthy
+      censorship_service:
+        condition: service_healthy
+
+  news_service:
+    build:
+      context: ./news_service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=news_user
+      - DB_PASSWORD=news_password
+      - DB_NAME=news_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/api/news"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  comments_service:
+    build:
+      context: ./comments_service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=comments_user
+      - DB_PASSWORD=comments_password
+      - DB_NAME=comments_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  censorship_service:
+    build:
+      context: ./censorship_service
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_MULTIPLE_DATABASES=news_db,comments_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: ["postgres", "-c", "max_connections=1000"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
