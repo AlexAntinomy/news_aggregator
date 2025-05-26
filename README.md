@@ -7,6 +7,7 @@
 - Docker
 - Docker Compose
 - Git
+- Postman (опционально, для тестирования API)
 
 ## Установка и запуск
 
@@ -27,6 +28,22 @@ docker-compose up -d
 - Comments Service: http://localhost:8081
 - Censorship Service: http://localhost:8083
 
+## Тестирование API с помощью Postman
+
+Для удобного тестирования API вы можете использовать Postman. В репозитории есть готовая коллекция с примерами запросов:
+
+1. Откройте Postman
+2. Импортируйте коллекцию:
+   - Нажмите "Import"
+   - Выберите файл `news_aggregator_api_gateway.postman_collection.json`
+   - Или используйте "Import from Link" с URL вашего репозитория
+
+Коллекция содержит следующие запросы:
+- Получение списка новостей
+- Получение деталей новости
+- Добавление комментария
+- Получение комментариев к новости
+
 ## Структура проекта
 
 - `api_gateway/` - API Gateway сервис
@@ -36,6 +53,7 @@ docker-compose up -d
 - `init-multiple-dbs.sh` - Скрипт инициализации баз данных
 - `init.sql` - SQL скрипт создания таблиц
 - `docker-compose.yml` - Конфигурация Docker Compose
+- `news_aggregator_api_gateway.postman_collection.json` - Коллекция Postman для тестирования API
 
 ## API Endpoints
 

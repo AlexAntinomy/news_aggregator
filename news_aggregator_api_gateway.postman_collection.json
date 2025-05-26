@@ -1,0 +1,111 @@
+{
+  "info": {
+    "_postman_id": "news-aggregator-api-gateway-collection",
+    "name": "News Aggregator API Gateway",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Get News List (Page 1)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/news",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "news"]
+        }
+      }
+    },
+    {
+      "name": "Get News List (Page 2)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/news?page=2",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "news"],
+          "query": [
+            {"key": "page", "value": "2"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get News List (Search by Title)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/news?s=Россия",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "news"],
+          "query": [
+            {"key": "s", "value": "Россия"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get News Details (id=1)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/news/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "news", "1"]
+        }
+      }
+    },
+    {
+      "name": "Create Comment (should fail censorship)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"news_id\": 1,\n  \"text\": \"spam\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/comments",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "comments"]
+        }
+      }
+    },
+    {
+      "name": "Create Comment (should pass censorship)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"news_id\": 1,\n  \"text\": \"Отличная новость!\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/comments",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "comments"]
+        }
+      }
+    }
+  ]
+} 
