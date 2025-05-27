@@ -51,10 +51,18 @@ type News struct {
 const (
 	defaultPageSize = 15
 	maxPageSize     = 100
+	// Настройки HTTP-клиента
+	httpTimeout = 10 * time.Second
+	maxRetries  = 3
+	retryDelay  = 2 * time.Second
 )
 
 var (
 	db *pgxpool.Pool
+	// Создаем HTTP-клиент с таймаутами
+	httpClient = &http.Client{
+		Timeout: httpTimeout,
+	}
 )
 
 func main() {
@@ -134,19 +142,97 @@ func startPolling() {
 }
 
 func fetchAndSaveFeed(feedURL string) {
-	resp, err := http.Get(feedURL)
-	if err != nil {
-		log.Printf("Ошибка получения ленты %s: %v", feedURL, err)
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Создаем контекст с таймаутом
+		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+		defer cancel()
+
+		// Создаем запрос с контекстом
+		req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
+		if err != nil {
+			logrus.WithError(err).WithField("url", feedURL).Error("Ошибка создания запроса")
+			return
+		}
+
+		// Выполняем запрос
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"url":     feedURL,
+				"attempt": attempt,
+			}).Warn("Ошибка получения RSS-ленты")
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return
+		}
+		defer resp.Body.Close()
+
+		// Проверяем статус ответа
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("неверный статус ответа: %d", resp.StatusCode)
+			logrus.WithError(lastErr).WithFields(logrus.Fields{
+				"url":     feedURL,
+				"status":  resp.StatusCode,
+				"attempt": attempt,
+			}).Warn("Ошибка получения RSS-ленты")
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return
+		}
+
+		// Проверяем Content-Type
+		contentType := resp.Header.Get("Content-Type")
+		if !strings.Contains(contentType, "xml") && !strings.Contains(contentType, "rss") {
+			lastErr = fmt.Errorf("неверный Content-Type: %s", contentType)
+			logrus.WithError(lastErr).WithFields(logrus.Fields{
+				"url":         feedURL,
+				"contentType": contentType,
+				"attempt":     attempt,
+			}).Warn("Неверный тип контента")
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return
+		}
+
+		// Читаем и декодируем ответ
+		var rss RSS
+		if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+			lastErr = err
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"url":     feedURL,
+				"attempt": attempt,
+			}).Warn("Ошибка декодирования RSS")
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				continue
+			}
+			return
+		}
+
+		// Если все успешно, сохраняем данные
+		if err := saveFeedData(feedURL, rss); err != nil {
+			logrus.WithError(err).WithField("url", feedURL).Error("Ошибка сохранения данных")
+		}
 		return
 	}
-	defer resp.Body.Close()
 
-	var rss RSS
-	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
-		log.Printf("Ошибка декодирования RSS из %s: %v", feedURL, err)
-		return
-	}
+	// Если все попытки не удались
+	logrus.WithError(lastErr).WithFields(logrus.Fields{
+		"url":      feedURL,
+		"attempts": maxRetries,
+	}).Error("Не удалось получить RSS-ленту после всех попыток")
+}
 
+// saveFeedData сохраняет данные из RSS-ленты в базу данных
+func saveFeedData(feedURL string, rss RSS) error {
 	// Определяем источник на основе URL
 	var sourceName string
 	switch {
@@ -164,49 +250,68 @@ func fetchAndSaveFeed(feedURL string) {
 		sourceName = "Неизвестный источник"
 	}
 
+	// Создаем транзакцию
+	tx, err := db.Begin(context.Background())
+	if err != nil {
+		return fmt.Errorf("ошибка создания транзакции: %v", err)
+	}
+	defer tx.Rollback(context.Background())
+
 	// Получаем или создаем источник
 	var sourceID int
-	err = db.QueryRow(context.Background(), `
+	err = tx.QueryRow(context.Background(), `
 		INSERT INTO sources (name)
 		VALUES ($1)
 		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id
 	`, sourceName).Scan(&sourceID)
 	if err != nil {
-		log.Printf("Ошибка сохранения источника %s: %v", sourceName, err)
-		return
+		return fmt.Errorf("ошибка сохранения источника %s: %v", sourceName, err)
 	}
 
 	// Сохраняем или обновляем ленту
 	var feedID int
-	err = db.QueryRow(context.Background(), `
+	err = tx.QueryRow(context.Background(), `
 		INSERT INTO rss_feeds (url, source_id)
 		VALUES ($1, $2)
 		ON CONFLICT (url) DO UPDATE SET source_id = EXCLUDED.source_id
 		RETURNING id
 	`, feedURL, sourceID).Scan(&feedID)
 	if err != nil {
-		log.Printf("Ошибка сохранения ленты %s: %v", feedURL, err)
-		return
+		return fmt.Errorf("ошибка сохранения ленты %s: %v", feedURL, err)
 	}
 
 	// Сохраняем новости
 	for _, item := range rss.Channel.Items {
 		pubDate, err := time.Parse(time.RFC1123Z, item.PubDate)
 		if err != nil {
-			log.Printf("Ошибка разбора даты %s: %v", item.PubDate, err)
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"url":   feedURL,
+				"date":  item.PubDate,
+				"title": item.Title,
+			}).Warn("Ошибка разбора даты")
 			continue
 		}
 
-		_, err = db.Exec(context.Background(), `
+		_, err = tx.Exec(context.Background(), `
 			INSERT INTO news (title, description, publication_date, source_link, rss_feed_id)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (source_link) DO NOTHING
 		`, item.Title, item.Description, pubDate, item.Link, feedID)
 		if err != nil {
-			log.Printf("Ошибка сохранения новости: %v", err)
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"url":   feedURL,
+				"title": item.Title,
+			}).Warn("Ошибка сохранения новости")
 		}
 	}
+
+	// Завершаем транзакцию
+	if err := tx.Commit(context.Background()); err != nil {
+		return fmt.Errorf("ошибка завершения транзакции: %v", err)
+	}
+
+	return nil
 }
 
 func handleNewsList(w http.ResponseWriter, r *http.Request) {
