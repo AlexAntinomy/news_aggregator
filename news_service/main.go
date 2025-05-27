@@ -5,16 +5,19 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
-	"news_service/middleware"
+	"news_aggregator/news_service/middleware"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 )
 
@@ -41,11 +44,16 @@ type Item struct {
 type News struct {
 	ID              int       `json:"id"`
 	Title           string    `json:"title"`
-	Content         string    `json:"content"`
 	Description     string    `json:"description"`
 	PublicationDate time.Time `json:"date"`
 	SourceLink      string    `json:"source_link"`
 	SourceName      string    `json:"source"`
+}
+
+// Добавляю структуру для конфига
+type Config struct {
+	RSSFeeds     []string `json:"rss_feeds"`
+	PollInterval int      `json:"poll_interval"`
 }
 
 const (
@@ -58,181 +66,284 @@ const (
 )
 
 var (
-	db *pgxpool.Pool
-	// Создаем HTTP-клиент с таймаутами
-	httpClient = &http.Client{
-		Timeout: httpTimeout,
-	}
+	// Метрики Prometheus
+	newsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "news_total",
+		Help: "Total number of news items processed",
+	})
+
+	feedFetchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "feed_fetch_duration_seconds",
+		Help:    "Time spent fetching RSS feeds",
+		Buckets: prometheus.DefBuckets,
+	})
+
+	httpRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "http_request_duration_seconds",
+			Help:    "Duration of HTTP requests",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+
+	// Глобальные переменные
+	db     *pgxpool.Pool
+	logger *logrus.Logger
 )
 
+func init() {
+	// Регистрируем метрики
+	prometheus.MustRegister(newsTotal)
+	prometheus.MustRegister(feedFetchDuration)
+	prometheus.MustRegister(httpRequestDuration)
+}
+
 func main() {
-	// Настройка логгера
-	logrus.SetFormatter(&logrus.JSONFormatter{})
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
+	// Настраиваем логгер
+	logger = logrus.New()
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	logger.SetOutput(os.Stdout)
 
-	// Инициализация подключения к базе данных
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbName := os.Getenv("DB_NAME")
-
-	if dbHost == "" {
-		dbHost = "localhost"
-	}
-	if dbPort == "" {
-		dbPort = "5432"
-	}
-	if dbUser == "" {
-		dbUser = "postgres"
-	}
-	if dbPassword == "" {
-		dbPassword = "postgres"
-	}
-	if dbName == "" {
-		dbName = "news_db"
+	// Получаем уровень логирования из переменной окружения
+	if level, err := logrus.ParseLevel(os.Getenv("LOG_LEVEL")); err == nil {
+		logger.SetLevel(level)
+	} else {
+		logger.SetLevel(logrus.InfoLevel)
 	}
 
-	connString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		dbUser, dbPassword, dbHost, dbPort, dbName)
+	// Создаем канал для сигналов завершения
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Подключаемся к базе данных
 	var err error
-	db, err = pgxpool.New(context.Background(), connString)
+	db, err = pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("Не удалось подключиться к базе данных: %v", err)
+		logger.Fatalf("Unable to connect to database: %v", err)
 	}
 	defer db.Close()
 
-	// Запуск опроса RSS
-	go startPolling()
+	// Проверяем соединение с базой данных
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := db.Ping(ctx); err != nil {
+		logger.Fatalf("Unable to ping database: %v", err)
+	}
+	logger.Info("Successfully connected to database")
 
-	// Настройка HTTP-обработчиков с middleware
+	// Читаем config.json
+	var config Config
+	configFile, err := os.Open("config.json")
+	if err != nil {
+		logger.Fatalf("Не удалось открыть config.json: %v", err)
+	}
+	defer configFile.Close()
+	if err := json.NewDecoder(configFile).Decode(&config); err != nil {
+		logger.Fatalf("Не удалось прочитать config.json: %v", err)
+	}
+	if len(config.RSSFeeds) == 0 {
+		logger.Warn("Список RSS-лент пуст в config.json")
+	}
+	if config.PollInterval <= 0 {
+		config.PollInterval = 5 // по умолчанию 5 минут
+	}
+
+	// Создаем HTTP сервер
 	mux := http.NewServeMux()
+
+	// Добавляем обработчики
 	mux.HandleFunc("/api/news", handleNewsList)
 	mux.HandleFunc("/api/news/", handleNewsDetail)
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// Применяем middleware
 	handler := middleware.RequestIDMiddleware(mux)
-	handler = middleware.LoggingMiddleware(handler)
+	handler = middleware.LoggingMiddleware(handler, logger)
+	handler = middleware.MetricsMiddleware(handler, httpRequestDuration)
 
-	log.Println("Запуск сервиса новостей на порту :8082")
-	if err := http.ListenAndServe(":8082", handler); err != nil {
-		log.Fatalf("Ошибка запуска сервера: %v", err)
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
+
+	// Запускаем сервер в горутине
+	go func() {
+		logger.Info("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Первая загрузка новостей сразу при старте
+	if err := fetchAndSaveFeed(db, logger, config.RSSFeeds); err != nil {
+		logger.Errorf("Error fetching feed: %v", err)
+	}
+
+	// Запускаем периодическое обновление новостей
+	go func() {
+		ticker := time.NewTicker(time.Duration(config.PollInterval) * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := fetchAndSaveFeed(db, logger, config.RSSFeeds); err != nil {
+					logger.Errorf("Error fetching feed: %v", err)
+				}
+			}
+		}
+	}()
+
+	// Ждем сигнала завершения
+	<-sigChan
+	logger.Info("Shutting down server...")
+
+	// Создаем контекст с таймаутом для graceful shutdown
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Закрываем сервер
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	logger.Info("Server stopped")
 }
 
-func startPolling() {
-	// URL RSS-лент
-	feeds := []string{
-		"https://tass.ru/rss/v2.xml",
-		"https://www.kommersant.ru/RSS/news.xml",
-		"https://lenta.ru/rss",
-	}
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		for _, feedURL := range feeds {
-			go fetchAndSaveFeed(feedURL)
-		}
-		<-ticker.C
-	}
-}
-
-func fetchAndSaveFeed(feedURL string) {
-	var lastErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Создаем контекст с таймаутом
-		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
-		defer cancel()
-
-		// Создаем запрос с контекстом
-		req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
-		if err != nil {
-			logrus.WithError(err).WithField("url", feedURL).Error("Ошибка создания запроса")
-			return
-		}
-
-		// Выполняем запрос
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			lastErr = err
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"url":     feedURL,
-				"attempt": attempt,
-			}).Warn("Ошибка получения RSS-ленты")
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return
-		}
-		defer resp.Body.Close()
-
-		// Проверяем статус ответа
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("неверный статус ответа: %d", resp.StatusCode)
-			logrus.WithError(lastErr).WithFields(logrus.Fields{
-				"url":     feedURL,
-				"status":  resp.StatusCode,
-				"attempt": attempt,
-			}).Warn("Ошибка получения RSS-ленты")
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return
-		}
-
-		// Проверяем Content-Type
-		contentType := resp.Header.Get("Content-Type")
-		if !strings.Contains(contentType, "xml") && !strings.Contains(contentType, "rss") {
-			lastErr = fmt.Errorf("неверный Content-Type: %s", contentType)
-			logrus.WithError(lastErr).WithFields(logrus.Fields{
-				"url":         feedURL,
-				"contentType": contentType,
-				"attempt":     attempt,
-			}).Warn("Неверный тип контента")
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return
-		}
-
-		// Читаем и декодируем ответ
-		var rss RSS
-		if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
-			lastErr = err
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"url":     feedURL,
-				"attempt": attempt,
-			}).Warn("Ошибка декодирования RSS")
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				continue
-			}
-			return
-		}
-
-		// Если все успешно, сохраняем данные
-		if err := saveFeedData(feedURL, rss); err != nil {
-			logrus.WithError(err).WithField("url", feedURL).Error("Ошибка сохранения данных")
-		}
+// handleHealth обрабатывает запросы к /health
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Если все попытки не удались
-	logrus.WithError(lastErr).WithFields(logrus.Fields{
-		"url":      feedURL,
-		"attempts": maxRetries,
-	}).Error("Не удалось получить RSS-ленту после всех попыток")
+	// Проверяем соединение с базой данных
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	if err := db.Ping(ctx); err != nil {
+		http.Error(w, "Database connection failed", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	}
+}
+
+func fetchAndSaveFeed(db *pgxpool.Pool, logger *logrus.Logger, feeds []string) error {
+	start := time.Now()
+	defer func() {
+		feedFetchDuration.Observe(time.Since(start).Seconds())
+	}()
+
+	for _, feedURL := range feeds {
+		go func(url string) {
+			var lastErr error
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				// Создаем контекст с таймаутом
+				ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+				defer cancel()
+
+				// Создаем запрос с контекстом
+				req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+				if err != nil {
+					logger.WithError(err).WithField("url", url).Error("Ошибка создания запроса")
+					return
+				}
+
+				// Выполняем запрос
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					lastErr = err
+					logger.WithError(err).WithFields(logrus.Fields{
+						"url":     url,
+						"attempt": attempt,
+					}).Warn("Ошибка получения RSS-ленты")
+					if attempt < maxRetries {
+						time.Sleep(retryDelay)
+						return
+					}
+					return
+				}
+				defer resp.Body.Close()
+
+				// Проверяем статус ответа
+				if resp.StatusCode != http.StatusOK {
+					lastErr = fmt.Errorf("неверный статус ответа: %d", resp.StatusCode)
+					logger.WithError(lastErr).WithFields(logrus.Fields{
+						"url":     url,
+						"status":  resp.StatusCode,
+						"attempt": attempt,
+					}).Warn("Ошибка получения RSS-ленты")
+					if attempt < maxRetries {
+						time.Sleep(retryDelay)
+						return
+					}
+					return
+				}
+
+				// Проверяем Content-Type
+				contentType := resp.Header.Get("Content-Type")
+				if !strings.Contains(contentType, "xml") && !strings.Contains(contentType, "rss") {
+					lastErr = fmt.Errorf("неверный Content-Type: %s", contentType)
+					logger.WithError(lastErr).WithFields(logrus.Fields{
+						"url":         url,
+						"contentType": contentType,
+						"attempt":     attempt,
+					}).Warn("Неверный тип контента")
+					if attempt < maxRetries {
+						time.Sleep(retryDelay)
+						return
+					}
+					return
+				}
+
+				// Читаем и декодируем ответ
+				var rss RSS
+				if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+					lastErr = err
+					logger.WithError(err).WithFields(logrus.Fields{
+						"url":     url,
+						"attempt": attempt,
+					}).Warn("Ошибка декодирования RSS")
+					if attempt < maxRetries {
+						time.Sleep(retryDelay)
+						return
+					}
+					return
+				}
+
+				// Если все успешно, сохраняем данные
+				if err := saveFeedData(db, url, rss); err != nil {
+					logger.WithError(err).WithField("url", url).Error("Ошибка сохранения данных")
+					newsTotal.Inc()
+				} else {
+					newsTotal.Inc()
+				}
+				return
+			}
+
+			// Если все попытки не удались
+			logger.WithError(lastErr).WithFields(logrus.Fields{
+				"url":      url,
+				"attempts": maxRetries,
+			}).Error("Не удалось получить RSS-ленту после всех попыток")
+			newsTotal.Inc()
+		}(feedURL)
+	}
+
+	return nil
 }
 
 // saveFeedData сохраняет данные из RSS-ленты в базу данных
-func saveFeedData(feedURL string, rss RSS) error {
+func saveFeedData(db *pgxpool.Pool, feedURL string, rss RSS) error {
 	// Определяем источник на основе URL
 	var sourceName string
 	switch {
@@ -285,7 +396,7 @@ func saveFeedData(feedURL string, rss RSS) error {
 	for _, item := range rss.Channel.Items {
 		pubDate, err := time.Parse(time.RFC1123Z, item.PubDate)
 		if err != nil {
-			logrus.WithError(err).WithFields(logrus.Fields{
+			logger.WithError(err).WithFields(logrus.Fields{
 				"url":   feedURL,
 				"date":  item.PubDate,
 				"title": item.Title,
@@ -299,7 +410,7 @@ func saveFeedData(feedURL string, rss RSS) error {
 			ON CONFLICT (source_link) DO NOTHING
 		`, item.Title, item.Description, pubDate, item.Link, feedID)
 		if err != nil {
-			logrus.WithError(err).WithFields(logrus.Fields{
+			logger.WithError(err).WithFields(logrus.Fields{
 				"url":   feedURL,
 				"title": item.Title,
 			}).Warn("Ошибка сохранения новости")
@@ -373,7 +484,7 @@ func handleNewsList(w http.ResponseWriter, r *http.Request) {
 	var totalItems int
 	err = db.QueryRow(r.Context(), countQuery, args[:argCount-1]...).Scan(&totalItems)
 	if err != nil {
-		logrus.WithError(err).Error("Ошибка получения общего количества записей")
+		logger.WithError(err).Error("Ошибка получения общего количества записей")
 		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
@@ -431,18 +542,35 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	newsID := parts[3]
 	var news News
 	err := db.QueryRow(context.Background(), `
-		SELECT n.id, n.title, n.description, n.content, n.publication_date, n.source_link, s.name as source_name
+		SELECT n.id, n.title, n.description, n.publication_date, n.source_link, s.name as source_name
 		FROM news n
 		JOIN rss_feeds rf ON n.rss_feed_id = rf.id
 		JOIN sources s ON rf.source_id = s.id
 		WHERE n.id = $1
-	`, newsID).Scan(&news.ID, &news.Title, &news.Description, &news.Content, &news.PublicationDate, &news.SourceLink, &news.SourceName)
+	`, newsID).Scan(&news.ID, &news.Title, &news.Description, &news.PublicationDate, &news.SourceLink, &news.SourceName)
 	if err != nil {
-		logrus.WithError(err).Error("Ошибка получения деталей новости")
+		logger.WithError(err).Error("Ошибка получения деталей новости")
 		http.Error(w, "Новость не найдена", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(news)
+}
+
+func getSourceFromURL(url string) string {
+	switch {
+	case strings.Contains(url, "tass.ru"):
+		return "ТАСС"
+	case strings.Contains(url, "kommersant.ru"):
+		return "Коммерсантъ"
+	case strings.Contains(url, "lenta.ru"):
+		return "Lenta.ru"
+	case strings.Contains(url, "ria.ru"):
+		return "РИА Новости"
+	case strings.Contains(url, "5-tv.ru"):
+		return "5-tv.ru"
+	default:
+		return "Неизвестный источник"
+	}
 }

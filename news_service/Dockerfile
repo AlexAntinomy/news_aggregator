@@ -6,6 +6,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o news_service .
 
 FROM alpine:latest
 WORKDIR /app
+RUN apk add --no-cache wget
 COPY --from=builder /app/news_service .
 EXPOSE 8082
 CMD ["./news_service"] 

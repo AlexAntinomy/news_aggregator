@@ -16,7 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// NewsShortDetailed - краткая информация о новости
+// Краткая информация о новости
 type NewsShortDetailed struct {
 	ID      int    `json:"id"`
 	Title   string `json:"title"`
@@ -24,7 +24,7 @@ type NewsShortDetailed struct {
 	Date    string `json:"date"`
 }
 
-// NewsFullDetailed - полная информация о новости с комментариями
+// Полная информация о новости с комментариями
 type NewsFullDetailed struct {
 	ID       int       `json:"id"`
 	Title    string    `json:"title"`
@@ -34,7 +34,7 @@ type NewsFullDetailed struct {
 	Comments []Comment `json:"comments"`
 }
 
-// Comment - комментарий к новости
+// Комментарий к новости
 type Comment struct {
 	ID        int    `json:"id"`
 	NewsID    int    `json:"news_id"`
@@ -81,7 +81,7 @@ func main() {
 	}
 }
 
-// RequestIDMiddleware добавляет ID запроса в контекст
+// Middleware для добавления ID запроса в контекст
 func RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
@@ -93,7 +93,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// LoggingMiddleware логирует информацию о каждом запросе
+// Middleware для логирования информации о каждом запросе
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -137,7 +137,7 @@ func generateRequestID() string {
 	return hex.EncodeToString(b)
 }
 
-// handleWelcome - обработчик главной страницы
+// Обработчик главной страницы
 func handleWelcome(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -157,7 +157,7 @@ func handleWelcome(w http.ResponseWriter, r *http.Request) {
 	`))
 }
 
-// handleNewsList возвращает список новостей
+// Обработчик списка новостей
 func handleNewsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -184,7 +184,7 @@ func handleNewsList(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// handleNewsDetail возвращает детальную информацию о конкретной новости
+// Обработчик детальной информации о новости
 func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -260,7 +260,7 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(news)
 }
 
-// handleAddComment обрабатывает добавление новых комментариев
+// Обработчик добавления новых комментариев
 func handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

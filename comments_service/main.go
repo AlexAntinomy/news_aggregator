@@ -16,7 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Comment представляет комментарий к новости
+// Комментарий к новости
 type Comment struct {
 	ID        int       `json:"id"`
 	NewsID    int       `json:"news_id"`
@@ -25,7 +25,7 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// CommentRequest представляет тело запроса для создания комментария
+// Тело запроса для создания комментария
 type CommentRequest struct {
 	NewsID   int    `json:"news_id"`
 	ParentID *int   `json:"parent_id,omitempty"`
@@ -73,7 +73,7 @@ func main() {
 	}
 	defer db.Close()
 
-	// Создаем таблицы, если они не существуют
+	// Создание таблиц, если они не существуют
 	if err := createTables(); err != nil {
 		log.Fatalf("Ошибка создания таблиц: %v", err)
 	}
@@ -83,7 +83,7 @@ func main() {
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/api/comments", handleComments)
 
-	// Применяем middleware
+	// Применение middleware
 	handler := RequestIDMiddleware(mux)
 	handler = LoggingMiddleware(handler)
 
@@ -107,7 +107,14 @@ func createTables() error {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		w.Write([]byte(`{"status": "healthy"}`))
+	}
 }
 
 func handleComments(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +206,7 @@ func createComment(req CommentRequest) (*Comment, error) {
 	return &comment, nil
 }
 
-// RequestIDMiddleware adds a request ID to the request context
+// Middleware для добавления ID запроса в контекст
 func RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
@@ -211,7 +218,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// LoggingMiddleware logs information about each request
+// Middleware для логирования информации о каждом запросе
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

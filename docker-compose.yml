@@ -8,9 +8,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - NEWS_SERVICE_URL=http://news_service:8082
+      - NEWS_SERVICE_URL=http://news_service:8080
       - COMMENTS_SERVICE_URL=http://comments_service:8081
       - CENSORSHIP_SERVICE_URL=http://censorship_service:8083
+      - LOG_LEVEL=info
+    volumes:
+      - ./logs/api_gateway:/var/log/api_gateway
     depends_on:
       news_service:
         condition: service_healthy
@@ -18,27 +21,56 @@ services:
         condition: service_healthy
       censorship_service:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   news_service:
-    build:
-      context: ./news_service
-      dockerfile: Dockerfile
-    ports:
-      - "8082:8082"
+    build: ./news_service
+    # ports:
+    #   - "8080:8080"
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=news_user
-      - DB_PASSWORD=news_password
-      - DB_NAME=news_db
+      - DATABASE_URL=postgres://news_user:news_password@postgres:5432/news_db?sslmode=disable
+      - LOG_LEVEL=info
+    volumes:
+      - ./logs/news_service:/var/log/news_service
+      - ./config.json:/app/config.json:ro
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/api/news"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
       retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   comments_service:
     build:
@@ -52,14 +84,30 @@ services:
       - DB_USER=comments_user
       - DB_PASSWORD=comments_password
       - DB_NAME=comments_db
+      - LOG_LEVEL=info
+    volumes:
+      - ./logs/comments_service:/var/log/comments_service
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   censorship_service:
     build:
@@ -67,11 +115,28 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8083:8083"
+    environment:
+      - LOG_LEVEL=info
+    volumes:
+      - ./logs/censorship_service:/var/log/censorship_service
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
   postgres:
     image: postgres:15-alpine
@@ -85,12 +150,21 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./logs/postgres:/var/log/postgresql
     command: ["postgres", "-c", "max_connections=1000"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
 
 volumes:
   postgres_data:
