@@ -326,7 +326,7 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	newsID := parts[3]
 	var news News
 	err := db.QueryRow(context.Background(), `
-		SELECT n.id, n.title, n.description, n.description, n.publication_date, n.source_link, s.name as source_name
+		SELECT n.id, n.title, n.description, n.content, n.publication_date, n.source_link, s.name as source_name
 		FROM news n
 		JOIN rss_feeds rf ON n.rss_feed_id = rf.id
 		JOIN sources s ON rf.source_id = s.id

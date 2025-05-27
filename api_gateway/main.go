@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -129,7 +130,10 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 func generateRequestID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if random generation fails
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -156,6 +160,7 @@ func handleWelcome(w http.ResponseWriter, r *http.Request) {
 // handleNewsList возвращает список новостей
 func handleNewsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
@@ -163,6 +168,7 @@ func handleNewsList(w http.ResponseWriter, r *http.Request) {
 	// Пересылаем запрос в сервис новостей со всеми параметрами
 	resp, err := http.Get(newsServiceURL + "/api/news?" + r.URL.RawQuery)
 	if err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка получения новостей", http.StatusInternalServerError)
 		return
 	}
@@ -181,6 +187,7 @@ func handleNewsList(w http.ResponseWriter, r *http.Request) {
 // handleNewsDetail возвращает детальную информацию о конкретной новости
 func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
@@ -188,6 +195,7 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	// Извлекаем ID новости из URL
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) != 4 {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Неверный ID новости", http.StatusBadRequest)
 		return
 	}
@@ -198,12 +206,14 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	newsResp, err := http.Get(newsServiceURL + "/api/news/" + newsID)
 	if err != nil {
 		log.Printf("Ошибка получения новости: %v", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка получения новости", http.StatusInternalServerError)
 		return
 	}
 	defer newsResp.Body.Close()
 
 	if newsResp.StatusCode != http.StatusOK {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Новость не найдена", http.StatusNotFound)
 		return
 	}
@@ -212,15 +222,24 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	commentsResp, err := http.Get(commentsServiceURL + "/api/comments?news_id=" + newsID)
 	if err != nil {
 		log.Printf("Ошибка получения комментариев: %v", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка получения комментариев", http.StatusInternalServerError)
 		return
 	}
 	defer commentsResp.Body.Close()
 
+	if commentsResp.StatusCode != http.StatusOK {
+		log.Printf("Ошибка получения комментариев: статус %d", commentsResp.StatusCode)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		http.Error(w, "Ошибка получения комментариев", http.StatusInternalServerError)
+		return
+	}
+
 	// Разбираем ответ с новостью
 	var news NewsFullDetailed
 	if err := json.NewDecoder(newsResp.Body).Decode(&news); err != nil {
 		log.Printf("Ошибка разбора новости: %v", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка разбора новости", http.StatusInternalServerError)
 		return
 	}
@@ -229,6 +248,7 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 	var comments []Comment
 	if err := json.NewDecoder(commentsResp.Body).Decode(&comments); err != nil {
 		log.Printf("Ошибка разбора комментариев: %v", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка разбора комментариев", http.StatusInternalServerError)
 		return
 	}
@@ -243,6 +263,7 @@ func handleNewsDetail(w http.ResponseWriter, r *http.Request) {
 // handleAddComment обрабатывает добавление новых комментариев
 func handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
 		return
 	}
@@ -250,6 +271,7 @@ func handleAddComment(w http.ResponseWriter, r *http.Request) {
 	// Читаем тело запроса
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка чтения тела запроса", http.StatusBadRequest)
 		return
 	}
@@ -258,6 +280,7 @@ func handleAddComment(w http.ResponseWriter, r *http.Request) {
 	// Проверяем комментарий через сервис цензуры
 	censorResp, err := http.Post(censorshipServiceURL+"/api/censor", "application/json", bytes.NewReader(body))
 	if err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка проверки комментария", http.StatusInternalServerError)
 		return
 	}
@@ -276,6 +299,7 @@ func handleAddComment(w http.ResponseWriter, r *http.Request) {
 	// Если комментарий прошел цензуру, создаем его
 	resp, err := http.Post(commentsServiceURL+"/api/comments", "application/json", bytes.NewReader(body))
 	if err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		http.Error(w, "Ошибка создания комментария", http.StatusInternalServerError)
 		return
 	}
